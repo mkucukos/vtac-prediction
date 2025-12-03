@@ -90,11 +90,6 @@ The following figure shows an example of predicted VTAC risk compared to ground 
   <img src="assets/external_validation.png" width="80%">
 </p>
 
-
-<p align="center">
-  <img src="assets/external_validation.png" width="80%">
-</p>
-
 ## Utilities (import examples)
 ```python
 from utils.ecg_windowing import window_vtac_records, make_baseline_windows
