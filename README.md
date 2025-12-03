@@ -71,12 +71,29 @@ Run `notebooks/02_model_improvement.ipynb` to:
 - Save artifacts to `models/`:
   - `best_model.joblib`, `feature_list.json`, `thresholds.json`
 
+The figure below illustrates feature dynamics and model behavior during training:
+
+<p align="center">
+  <img src="assets/model_training.png" width="80%">
+</p>
+
 ### 3 Testing & Validation
 Run `notebooks/03_model_testing_validation.ipynb` to:
 - Load locked artifacts and evaluate on held-out subjects
 - Report ROC-AUC, PR-AUC, F1, precision/recall
 - Plot probabilities vs VTAC timeline
 - Export figures/tables for manuscripts
+
+The following figure shows an example of predicted VTAC risk compared to ground truth:
+
+<p align="center">
+  <img src="assets/external_validation.png" width="80%">
+</p>
+
+
+<p align="center">
+  <img src="assets/external_validation.png" width="80%">
+</p>
 
 ## Utilities (import examples)
 ```python
