@@ -4,7 +4,7 @@
   <img src="assets/main.png" width="80%">
 </p>
 
-Lightweight end-to-end workflow for **VTAC (ventricular tachyarrhythmia) prediction** using ECG windowing, feature extraction (QT/TMV/QRS/ST), z-scoring, and ML models (RF/XGBoost) with **GroupKFold** subject splits.
+Lightweight end-to-end workflow for **VTAC (Ventricular Tachycardia) prediction** using ECG windowing, feature extraction (QT/TMV/QRS/ST), z-scoring, and ML models (RF/XGBoost) with **GroupKFold** subject splits.
 
 ---
 
