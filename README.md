@@ -1,26 +1,37 @@
 # VTAC Prediction Pipeline
 
+<p align="center">
+  <img src="assets/main.png" width="80%">
+</p>
+
 Lightweight end-to-end workflow for **VTAC (ventricular tachyarrhythmia) prediction** using ECG windowing, feature extraction (QT/TMV/QRS/ST), z-scoring, and ML models (RF/XGBoost) with **GroupKFold** subject splits.
+
+---
 
 ## Contents
 - Preprocessing (windowing, labeling, feature extraction, z-scoring)
 - Model improvement (feature sets, tuning, CV diagnostics)
 - Testing & validation (held-out evaluation, plots)
 
+---
+
 ## Project Structure
 
 ```bash
 ├── notebooks/
-│ ├── 01_preprocessing.ipynb
-│ ├── 02_model_improvement.ipynb
-│ └── 03_model_testing_validation.ipynb
+│   ├── 01_preprocessing.ipynb
+│   ├── 02_model_improvement.ipynb
+│   └── 03_model_testing_validation.ipynb
 ├── utils/
-│ ├── ecg_windowing.py # window_vtac_records, make_baseline_windows
-│ ├── ecg_features.py # filters, TMV/QT/QRS/ST, process_dataframe
-│ └── ecg_plots.py # plot_tmv_qt_per_subject and other visuals
-├── model/ # saved estimators, feature lists, thresholds
+│   ├── ecg_windowing.py
+│   ├── ecg_features.py
+│   └── ecg_plots.py
+├── model/
+├── assets/
+│   ├── main.png
+│   ├── model_training.png
+│   └── external_validation.png
 └── README.md
-```
 
 ## Setup
 ```python
