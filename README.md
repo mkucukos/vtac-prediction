@@ -18,8 +18,6 @@ Lightweight end-to-end workflow for **VTAC (ventricular tachyarrhythmia) predict
 │ ├── ecg_windowing.py # window_vtac_records, make_baseline_windows
 │ ├── ecg_features.py # filters, TMV/QT/QRS/ST, process_dataframe
 │ └── ecg_plots.py # plot_tmv_qt_per_subject and other visuals
-├── data/
-│ └── processed/ # windowed.parquet, features.parquet, zscores.parquet
 ├── model/ # saved estimators, feature lists, thresholds
 └── README.md
 ```
