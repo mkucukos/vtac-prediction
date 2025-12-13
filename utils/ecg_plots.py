@@ -4,187 +4,143 @@ import matplotlib.pyplot as plt
 import os
 import joblib
 from datetime import timedelta
+from scipy.signal import medfilt
 
 # ================================
 # A) STANDARDIZATION (NO PLOTTING)
 # ================================
 def compute_refs_and_zscores(results_df, sampling_rate=250, window_len_sec=30):
     """
-    Runs the exact same baseline selection, ref building, TMV_Global/QRS_Global,
-    z-scoring, and VTAC_Label logic as your original function, but returns the
-    concatenated DataFrame WITHOUT plotting.
+    REAL-TIME / CAUSAL STANDARDIZATION (INDEX-BASED)
+
+    - No baseline
+    - No VTAC logic (except label)
+    - Wait for at least 12 prior windows (points), NOT time
+    - TMV_Global & QRS_Global use evolving references
+    - Z-scores computed using past windows only
     """
-    unique_records = sorted(results_df["Record"].unique())
-    all_zscore_dfs = []
 
-    for record_id in unique_records:
+    df = results_df.copy()
+    df = df.sort_values(["Record", "Start"]).reset_index(drop=True)
 
-        # Pull only this record
-        record_df = results_df[results_df["Record"] == record_id].reset_index(drop=True)
-        if record_df.empty:
-            continue
+    min_history = 12  # <<< NEW
 
-        # Ensure Start is numeric seconds
-        if not np.issubdtype(record_df["Start"].dtype, np.number):
-            record_df["Start"] = pd.to_datetime(record_df["Start"])
-            record_df["Start"] = (
-                record_df["Start"] - record_df["Start"].iloc[0]
-            ).dt.total_seconds()
+    z_fields = [
+        "TMV_Score",
+        "QT_Interval",
+        "Mean_HR",
+        "Max_HR",
+        "Min_HR",
+        "RMSSD",
+        "SDNN",
+        "T_Flatness",
+        "TWAmp_Std",
+        "TWAmp_CV",
+        "QRS_Duration",
+        "QRS_Area",
+        "QRS_Skewness",
+        "ST_Deviation_Mean",
+        "ST_Slope_Mean",
+        "AC_ECG_Peak",
+        "AC_ECG_Lag_Sec",
+        "AC_ECG_MeanAroundPeak",
+        "AC_RR_Peak",
+        "AC_RR_Lag_Beats",
+        "AC_RR_MeanAroundPeak",
+    ]
 
-        # Extract VTAC window start times
-        vtac_rows = record_df[record_df["Label"].astype(str).str.upper() == "VTAC"]
-        vtac_times = vtac_rows["Start"].values if not vtac_rows.empty else []
+    df["TMV_Global"] = np.nan
+    df["QRS_Global"] = np.nan
+    df["VTAC_Label"] = 0
 
-        # ------------------------------------------------------------
-        # NEW BASELINE SELECTION (Case 1–3 accepted; Case 4–5 skipped)
-        # ------------------------------------------------------------
-        vtac_start = float(vtac_times.min()) if len(vtac_times) > 0 else None
+    for field in z_fields + ["TMV_Global", "QRS_Global"]:
+        df[f"{field}_Z"] = np.nan
 
-        # If no VTAC for this record → skip
-        if vtac_start is None:
-            print(f"[SKIP] Record {record_id}: No VTAC detected.")
-            continue
+    # -----------------------------
+    # Process per Record
+    # -----------------------------
+    for record_id, g in df.groupby("Record"):
 
-        # Threshold format: (required_pre_vtac_seconds, baseline_cutoff_seconds)
-        valid_thresholds = [
-            (500, 300),   # Case 1 → ≥200 sec baseline
-            (400, 240),   # Case 2 → ≥160 sec baseline
-            (300, 180),   # Case 3 → ≥120 sec baseline
-        ]
+        g = g.sort_values("Start").reset_index()
+        idx = g["index"].values
 
-        invalid_thresholds = [
-            (200, 120),   # Case 4 → too short (80 sec)
-            (100,  60),   # Case 5 → too short (40 sec)
-        ]
+        past_twaves = []
+        past_qrs = []
 
-        baseline_mask = None
+        # ---------- VTAC labeling (non-causal OK) ----------
+        vtac_times = g.loc[
+            g["Label"].astype(str).str.upper() == "VTAC", "Start"
+        ].values
 
-        # ---------- Try valid baseline ranges ----------
-        for required_pre, cutoff in valid_thresholds:
-            if (record_df["Start"] < (vtac_start - required_pre)).any():
-                baseline_mask = record_df["Start"] < (vtac_start - cutoff)
-                break
-
-        # ---------- If no valid baseline found, evaluate invalid thresholds ----------
-        if baseline_mask is None:
-
-            # Case 4–5 → skip immediately
-            for required_pre, cutoff in invalid_thresholds:
-                if (record_df["Start"] < (vtac_start - required_pre)).any():
-                    print(
-                        f"[SKIP] Record {record_id}: Only {required_pre}s pre-VTAC "
-                        f"(minimum required is 300/400/500)."
-                    )
-                    break
-            else:
-                # No baseline at all → skip
-                print(f"[SKIP] Record {record_id}: No usable pre-VTAC baseline.")
-            
-            continue  # ⚠️ Skip record
-
-        # ----------- From here baseline_mask is valid -----------
-
-        # ---- Subject-specific T-wave reference (median, len 100) ----
-        baseline_twaves = [
-            np.array(row["T_Wave"], dtype=float)
-            for _, row in record_df[baseline_mask].iterrows()
-            if isinstance(row.get("T_Wave"), list) and len(row["T_Wave"]) == 100
-        ]
-        if len(baseline_twaves) < 5:
-            continue
-        ref_twave = np.median(np.vstack(baseline_twaves), axis=0)
-
-        # ---- Subject-specific QRS reference (median, len 100) ----
-        baseline_qrs = [
-            np.array(row["QRS_Wave"], dtype=float)
-            for _, row in record_df[baseline_mask].iterrows()
-            if isinstance(row.get("QRS_Wave"), list) and len(row["QRS_Wave"]) == 100
-        ]
-        ref_qrs = (
-            np.median(np.vstack(baseline_qrs), axis=0)
-            if len(baseline_qrs) >= 5
-            else None
-        )
-
-        # ---- TMV_Global (MSE vs ref_twave) ----
-        record_df["TMV_Global"] = np.nan
-        for i, row in record_df.iterrows():
-            tw = row.get("T_Wave")
-            if isinstance(tw, list) and len(tw) == 100:
-                record_df.at[i, "TMV_Global"] = float(
-                    np.mean((np.array(tw, dtype=float) - ref_twave) ** 2)
-                )
-
-        # ---- QRS_Global (MSE vs ref_qrs, enforce len 100) ----
-        record_df["QRS_Global"] = np.nan
-        if ref_qrs is not None:
-            for i, row in record_df.iterrows():
-                qrs = row.get("QRS_Wave")
-                if isinstance(qrs, list) and len(qrs) == 100:
-                    record_df.at[i, "QRS_Global"] = float(
-                        np.mean((np.array(qrs, dtype=float) - ref_qrs) ** 2)
-                    )
-
-        # ---- Fields to Z-score (baseline-only) ----
-        z_fields = [
-            "TMV_Score",
-            "QT_Interval",
-            "Mean_HR",
-            "Max_HR",
-            "Min_HR",
-            "RMSSD",
-            "SDNN",
-            "T_Flatness",
-            "TWAmp_Std",
-            "TWAmp_CV",
-            "TMV_Global",
-            "QRS_Duration",
-            "QRS_Area",
-            "QRS_Skewness",
-            "ST_Deviation_Mean",
-            "ST_Slope_Mean",
-            "QRS_Global",
-            "AC_ECG_Peak",
-            "AC_ECG_Lag_Sec",
-            "AC_ECG_MeanAroundPeak",
-            "AC_RR_Peak",
-            "AC_RR_Lag_Beats",
-            "AC_RR_MeanAroundPeak",
-        ]
-        if "QRS_Shape_Var" in record_df.columns:
-            z_fields.append("QRS_Shape_Var")
-
-        for field in z_fields:
-            if field in record_df.columns:
-                values = record_df.loc[baseline_mask, field].dropna()
-                z_col = f"{field}_Z"
-                record_df[z_col] = np.nan
-                if len(values) >= 5:
-                    median = float(np.nanmedian(values))
-                    std = float(np.nanstd(values))
-                    record_df[z_col] = record_df[field].apply(
-                        lambda x: (x - median) / (std + 1e-6) if pd.notna(x) else np.nan
-                    )
-                    record_df[z_col] = record_df[z_col].fillna(10).clip(upper=10)
-
-        # ---- VTAC labeling & truncation ----
-        record_df["VTAC_Label"] = 0
         if len(vtac_times) > 0:
             vtac_start = float(vtac_times.min())
             vtac_end = float(vtac_times.max() + window_len_sec)
-            record_df.loc[
-                (record_df["Start"] >= vtac_start) & (record_df["Start"] <= vtac_end),
+
+            df.loc[
+                (df["Record"] == record_id)
+                & (df["Start"] >= vtac_start)
+                & (df["Start"] <= vtac_end),
                 "VTAC_Label",
             ] = 1
-            record_df = record_df[record_df["Start"] <= vtac_end].reset_index(drop=True)
-        else:
-            vtac_end = None
 
-        all_zscore_dfs.append(record_df)
+        # -----------------------------
+        # Window loop
+        # -----------------------------
+        for i, row in g.iterrows():
 
-    if not all_zscore_dfs:
-        return pd.DataFrame()
-    return pd.concat(all_zscore_dfs, ignore_index=True)
+            # ---------- TMV reference ----------
+            tw = row.get("T_Wave")
+            if isinstance(tw, (list, np.ndarray)) and len(tw) == 100:
+                tw = np.asarray(tw, dtype=float)
+
+                if len(past_twaves) >= min_history:
+                    ref_twave = np.median(np.vstack(past_twaves), axis=0)
+                    df.at[idx[i], "TMV_Global"] = float(
+                        np.mean((tw - ref_twave) ** 2)
+                    )
+
+                past_twaves.append(tw)
+
+            # ---------- QRS reference ----------
+            qrs = row.get("QRS_Wave")
+            if isinstance(qrs, (list, np.ndarray)) and len(qrs) == 100:
+                qrs = np.asarray(qrs, dtype=float)
+
+                if len(past_qrs) >= min_history:
+                    ref_qrs = np.median(np.vstack(past_qrs), axis=0)
+                    df.at[idx[i], "QRS_Global"] = float(
+                        np.mean((qrs - ref_qrs) ** 2)
+                    )
+
+                past_qrs.append(qrs)
+
+            # ---------- Z-scoring ----------
+            if i < min_history:
+                continue  # warm-up only
+
+            past_idx = idx[:i]
+
+            for field in z_fields + ["TMV_Global", "QRS_Global"]:
+
+                current_val = df.at[idx[i], field]
+                if pd.isna(current_val):
+                    continue
+
+                past_values = df.loc[past_idx, field].dropna()
+                if len(past_values) < min_history:
+                    continue
+
+                median = float(np.nanmedian(past_values))
+                q25, q75 = np.nanpercentile(past_values, [25, 75])
+                iqr = q75 - q25
+
+                if iqr < 1e-6:
+                    continue
+
+                z = (current_val - median) / (iqr / 1.349 + 1e-6)
+                df.at[idx[i], f"{field}_Z"] = np.clip(z, -10, 10)
+
+    return df
 
 # ==================
 # B) PLOTTING ONLY
@@ -342,6 +298,7 @@ def plot_standardized_qt_tmv_with_dual_prediction(
     xgb_model_path_reg="xgboost_vtac_model_regression.joblib",
     z_threshold=1.5,
     output_dir="plots",
+    smooth_kernel=3,   # <-- NEW
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -376,6 +333,16 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         record_df["Prob_XGB"] = xgb_model.predict_proba(X)[:, 1]
         record_df["Reg_RF"] = rf_model_reg.predict(X)
         record_df["Reg_XGB"] = xgb_model_reg.predict(X)
+
+        # --- Median filter smoothing (temporal) ---
+        if smooth_kernel and smooth_kernel > 1:
+            record_df["Prob_RF"] = medfilt(record_df["Prob_RF"].values, kernel_size=smooth_kernel)
+            record_df["Reg_RF"]  = medfilt(record_df["Reg_RF"].values,  kernel_size=smooth_kernel)
+
+            # Optional: if you later re-enable XGB plots
+            record_df["Prob_XGB"] = medfilt(record_df["Prob_XGB"].values, kernel_size=smooth_kernel)
+            record_df["Reg_XGB"]  = medfilt(record_df["Reg_XGB"].values,  kernel_size=smooth_kernel)
+
 
         # Keep only rows with valid predictions
         valid_mask = (
