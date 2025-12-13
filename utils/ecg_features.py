@@ -40,7 +40,7 @@ def extract_t_wave_features(t_wave_segment, sampling_rate=250):
 # ==============================
 # Bandpass filter
 # ==============================
-def bandpass_filter(signal, lowcut=0.2, highcut=30, fs=250, order=4):
+def bandpass_filter(signal, lowcut=0.2, highcut=25, fs=250, order=4):
     nyq = 0.5 * fs
     low = lowcut / nyq
     high = highcut / nyq
@@ -188,7 +188,7 @@ def calculate_tmv_and_qt(
             )
 
         ecg_filtered = bandpass_filter(
-            ecg_segment, lowcut=0.2, highcut=30, fs=sampling_rate
+            ecg_segment, lowcut=0.2, highcut=25, fs=sampling_rate
         )
         ecg_cleaned = nk.ecg_clean(ecg_filtered, sampling_rate=sampling_rate)
         _, info = nk.ecg_peaks(ecg_cleaned, sampling_rate=sampling_rate)
