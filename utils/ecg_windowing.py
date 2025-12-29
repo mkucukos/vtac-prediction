@@ -4,36 +4,6 @@ import numpy as np
 import wfdb
 
 
-def make_baseline_windows(
-    healthy_subject, sample_rate=250, win_sec=30, shift_sec=5, max_subjects=100
-):
-    WINDOW_SIZE = win_sec * sample_rate
-    WINDOW_SHIFT = shift_sec * sample_rate
-    out = []
-
-    for _, row in healthy_subject.iterrows():
-        sid, ecg = row["subject_id"], row["ecg_data"]
-        if not isinstance(ecg, list) or len(ecg) < WINDOW_SIZE:
-            continue
-        for start in range(0, len(ecg) - WINDOW_SIZE + 1, WINDOW_SHIFT):
-            end = start + WINDOW_SIZE
-            out.append(
-                {
-                    "Record": sid,
-                    "Start": start,
-                    "End": end,
-                    "Label": "baseline",
-                    "ECG": ecg[start:end],
-                }
-            )
-
-    df = pd.DataFrame(out)
-    if max_subjects is not None:
-        keep = df["Record"].unique()[:max_subjects]
-        df = df[df["Record"].isin(keep)].copy()
-    return df
-
-
 def window_vtac_records(
     record_dir: str,
     sample_rate: int = 250,
