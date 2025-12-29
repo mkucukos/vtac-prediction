@@ -483,43 +483,71 @@ def extend_last_vtac_label_inplace(df, sampling_rate=250, extension_sec=30):
 # ==============================
 # Main processing function (simple signature, returns DataFrame)
 # ==============================
-def process_dataframe(df, sampling_rate=250, extension_sec=30):
+def process_dataframe(df, sampling_rate=240, extension_sec=30):
     """
     1) Extend the last VTAC per record by `extension_sec` seconds (in samples).
     2) Print VTAC ratio change per subject.
-    3) Extract features per window (now includes QRS_Wave of length 100).
-    4) Return a single pandas DataFrame.
+    3) Extract ECG features per window (includes QRS_Wave).
+    4) Preserve Clip_Ratio for downstream QC-aware analysis.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns:
+        ['Record', 'Start', 'End', 'Label', 'ECG', 'Clip_Ratio']
+    sampling_rate : int
+        ECG sampling rate in Hz (default = 240)
+    extension_sec : int
+        Seconds to extend last VTAC label
+
+    Returns
+    -------
+    pandas.DataFrame
+        Feature-level DataFrame with QC metadata preserved
     """
-    # VTAC ratio before extension (per Record)
+
+    # --------------------------------------------------
+    # VTAC ratio BEFORE extension
+    # --------------------------------------------------
     before_ratio = df.groupby("Record")["Label"].apply(
         lambda x: (x.astype(str).str.upper() == "VTAC").mean() * 100
     )
 
-    # Apply VTAC extension
+    # --------------------------------------------------
+    # Apply VTAC extension (defensive copy)
+    # --------------------------------------------------
     df_ext = extend_last_vtac_label_inplace(
-        df, sampling_rate=sampling_rate, extension_sec=extension_sec
+        df.copy(),
+        sampling_rate=sampling_rate,
+        extension_sec=extension_sec,
     )
 
-    # VTAC ratio after extension (per Record)
+    # --------------------------------------------------
+    # VTAC ratio AFTER extension
+    # --------------------------------------------------
     after_ratio = df_ext.groupby("Record")["Label"].apply(
         lambda x: (x.astype(str).str.upper() == "VTAC").mean() * 100
     )
 
+    # --------------------------------------------------
     # Delta
-    delta_ratio = after_ratio - before_ratio
-
-    # Combine into DataFrame and print
+    # --------------------------------------------------
     ratio_df = pd.DataFrame(
         {
             "VTAC_Ratio_Before(%)": before_ratio,
             "VTAC_Ratio_After(%)": after_ratio,
-            "Delta(After-Before)": delta_ratio,
+            "Delta(After-Before)": after_ratio - before_ratio,
         }
     )
+
     print("\n=== VTAC Ratio Change Per Subject ===")
     print(ratio_df.to_string())
 
+    # --------------------------------------------------
+    # Feature extraction
+    # --------------------------------------------------
     results = []
+
     for _, row in tqdm(df_ext.iterrows(), total=len(df_ext)):
         (
             qt,
@@ -548,10 +576,12 @@ def process_dataframe(df, sampling_rate=250, extension_sec=30):
 
         results.append(
             {
+                # ---------------- Meta ----------------
                 "Record": row["Record"],
                 "Start": int(row["Start"]),
                 "End": int(row["End"]),
                 "Label": row["Label"],
+                "Clip_Ratio": row.get("Clip_Ratio", np.nan),
                 "QT_Interval": qt,
                 "T_Wave": t_wave,
                 "QRS_Wave": qrs_wave,
@@ -584,6 +614,50 @@ def process_dataframe(df, sampling_rate=250, extension_sec=30):
 
     return pd.DataFrame(results)
 
+def clipping_ratio(signal, k=8.0):
+    """
+    MAD-based amplitude clipping.
+    Returns:
+        clipped_signal : np.ndarray
+        ratio          : fraction of clipped samples (0–1)
+    """
+    signal = np.asarray(signal, dtype=float)
+
+    med = np.median(signal)
+    mad = np.median(np.abs(signal - med)) + 1e-6
+
+    lo = med - k * mad
+    hi = med + k * mad
+
+    clipped = np.clip(signal, lo, hi)
+    ratio = np.mean((signal < lo) | (signal > hi))
+
+    return clipped, ratio
+
+def flatline_ratio(signal, eps=1e-6):
+    """
+    Binary flatline detector.
+    Returns 1.0 if flatline detected, else 0.0
+    """
+    signal = np.asarray(signal, dtype=float)
+    if len(signal) < 2:
+        return 1.0
+
+    epoch_var = np.var(signal)
+    epoch_ptp = np.ptp(signal)
+
+    diffs = np.diff(signal)
+    repeat_ratio = np.mean(np.abs(diffs) < eps)
+
+    var_thresh = epoch_var * 0.2
+    amp_thresh = epoch_ptp * 0.2
+
+    flat_mask = ((epoch_var < var_thresh) & (epoch_ptp < amp_thresh)) or (
+        repeat_ratio > 0.98
+    )
+
+    return float(flat_mask)
+
 
 def create_windowed_ecg_from_mat(
     alarms_df,
@@ -594,119 +668,153 @@ def create_windowed_ecg_from_mat(
     window_shift=5,
     pre_buffer_sec=3600,
     post_buffer_sec=500,
+    mad_k=8.0,
+    max_clip_ratio=0.15,
+    verbose=True,
 ):
     """
-    Create 30s / 5s-shift sliding ECG windows from MAT waveform files,
-    but ONLY around the FIRST VTAC EVENT:
+    Create sliding ECG windows with window-level QC metadata.
 
-        • includes 3600 seconds BEFORE the first VTAC
-        • includes 500 seconds AFTER the first VTAC
-        • ignores ALL other VTAC events
+    QC metrics (per window):
+      • MAD-based clipping ratio
+      • Binary flatline flag
+      • QC_Pass boolean
 
     Returns:
-        pandas.DataFrame with columns:
-            ['Record', 'Start', 'End', 'Label', 'ECG']
+        DataFrame with columns:
+        ['Record', 'Start', 'End', 'Label',
+         'ECG', 'Clip_Ratio', 'Flatline_Flag', 'QC_Pass']
     """
 
-    wf_path = f"{waveform_dir}/{record_file}.mat"
+    wf_path = os.path.join(waveform_dir, f"{record_file}.mat")
     if not os.path.exists(wf_path):
         print(f"[SKIP] {wf_path} not found.")
         return None
 
-    # -----------------------------------------------------
-    # Load waveform from .mat
-    # -----------------------------------------------------
-    with h5py.File(wf_path, "r") as f_wave:
-        ecg = np.array(f_wave["ECG2w"]).squeeze()
-        ecg_time = np.array(f_wave["ECG2w_time"]).squeeze()
+    # --------------------------------------------------
+    # Load waveform
+    # --------------------------------------------------
+    with h5py.File(wf_path, "r") as f:
+        ecg = np.array(f["ECG2w"]).squeeze()
+        ecg_time = np.array(f["ECG2w_time"]).squeeze()
 
-    # Convert MATLAB serial time -> Python datetime
-    segment_start_times = np.array(
-        [
-            datetime.fromordinal(int(dn)) + timedelta(days=dn % 1) - timedelta(days=366)
-            for dn in ecg_time
-        ]
-    )
+    # MATLAB serial → datetime
+    segment_start_times = np.array([
+        datetime.fromordinal(int(dn)) + timedelta(days=dn % 1) - timedelta(days=366)
+        for dn in ecg_time
+    ])
+
     samples_per_segment = ecg.shape[1]
-
-    # Build full ECG timeline
-    full_time_vector = []
-    for start_time in segment_start_times:
-        full_time_vector.extend(
-            [
-                start_time + timedelta(seconds=i / sampling_rate)
-                for i in range(samples_per_segment)
-            ]
-        )
     full_ecg = ecg.flatten()
 
-    # -----------------------------------------------------
-    # Find ALL VTAC events for this record
-    # -----------------------------------------------------
-    alarms_record = alarms_df[alarms_df["Files"] == record_file]
-
-    vt_events = []
-    for _, alarm in alarms_record.iterrows():
-        vt_start = pd.to_datetime(
-            alarm["StartTime"], format="%m/%d/%y %H:%M", errors="coerce"
+    full_time = []
+    for t0 in segment_start_times:
+        full_time.extend(
+            t0 + timedelta(seconds=i / sampling_rate)
+            for i in range(samples_per_segment)
         )
-        vt_end = vt_start + timedelta(seconds=int(alarm["Duration"]))
-        vt_events.append((vt_start, vt_end))
+    full_time = np.array(full_time)
 
-    if not vt_events:
-        return None
+    # --------------------------------------------------
+    # Determine extraction region
+    # --------------------------------------------------
+    is_case_file = record_file.startswith("Case_")
 
-    # -----------------------------------------------------
-    # Keep ONLY the FIRST VTAC EVENT
-    # -----------------------------------------------------
-    first_vt_start, first_vt_end = sorted(vt_events, key=lambda x: x[0])[0]
+    if is_case_file:
+        plot_start = full_time[0]
+        plot_end = plot_start + timedelta(seconds=pre_buffer_sec)
+        vtac_intervals = []
+    else:
+        alarms_rec = alarms_df[alarms_df["Files"] == record_file]
+        vt_events = []
 
-    vtach_intervals = [(first_vt_start, first_vt_end)]
+        for _, alarm in alarms_rec.iterrows():
+            vt_start = pd.to_datetime(
+                alarm["StartTime"],
+                format="%m/%d/%y %H:%M",
+                errors="coerce",
+            )
+            if pd.isna(vt_start):
+                continue
+            vt_end = vt_start + timedelta(seconds=int(alarm["Duration"]))
+            vt_events.append((vt_start, vt_end))
 
-    # -----------------------------------------------------
-    # Restrict extraction region to:
-    #   FIRST_VTAC_START - 3600 sec
-    #   FIRST_VTAC_END + 500 sec
-    # -----------------------------------------------------
-    plot_start = first_vt_start - timedelta(seconds=pre_buffer_sec)
-    plot_end = first_vt_end + timedelta(seconds=post_buffer_sec)
+        if not vt_events:
+            return None
 
-    # Mask data inside region
-    mask = [(t >= plot_start and t <= plot_end) for t in full_time_vector]
-    plot_times = np.array(full_time_vector)[mask]
+        first_vt_start, first_vt_end = sorted(vt_events, key=lambda x: x[0])[0]
+        vtac_intervals = [(first_vt_start, first_vt_end)]
+
+        plot_start = first_vt_start - timedelta(seconds=pre_buffer_sec)
+        plot_end = first_vt_end + timedelta(seconds=post_buffer_sec)
+
+    mask = (full_time >= plot_start) & (full_time <= plot_end)
     plot_ecg = full_ecg[mask]
+    plot_time = full_time[mask]
 
-    # -----------------------------------------------------
-    # Sliding Windowing
-    # -----------------------------------------------------
-    window_size = window_duration * sampling_rate     # 30 sec × 240 Hz = 7200 samples
-    step_size = window_shift * sampling_rate          # 5 sec × 240 Hz = 1200 samples
+    # --------------------------------------------------
+    # Sliding windows
+    # --------------------------------------------------
+    win_samples = int(window_duration * sampling_rate)
+    step_samples = int(window_shift * sampling_rate)
 
-    windowed_data = []
+    windows = []
 
-    for start_idx in range(0, len(plot_ecg) - window_size + 1, step_size):
-        segment = plot_ecg[start_idx : start_idx + window_size]
-        start_time = plot_times[start_idx]
-        end_time = plot_times[start_idx + window_size - 1]
+    for idx, start_idx in enumerate(
+        range(0, len(plot_ecg) - win_samples + 1, step_samples)
+    ):
+        segment = plot_ecg[start_idx:start_idx + win_samples]
+        start_time = plot_time[start_idx]
+        end_time = plot_time[start_idx + win_samples - 1]
 
-        # Label each window: VTAC or Normal
+        # ---------------- QC ----------------
+        segment_clipped, clip_ratio = clipping_ratio(segment, k=mad_k)
+        flat_flag = flatline_ratio(segment_clipped)
+
+        qc_pass = (clip_ratio <= max_clip_ratio) and (flat_flag == 0.0)
+
+        if verbose and not qc_pass:
+            reasons = []
+            if clip_ratio > max_clip_ratio:
+                reasons.append(f"clip_ratio={clip_ratio:.2f}")
+            if flat_flag == 1.0:
+                reasons.append("flatline")
+
+            print(
+                f"[QC][{record_file}] Window {idx} "
+                f"{start_time}–{end_time} | "
+                f"{', '.join(reasons)}"
+            )
+
+        # ---------------- Label ----------------
         label = "Normal"
-        for vt_start, vt_end in vtach_intervals:
-            if vt_start <= start_time <= vt_end:
-                label = "VTAC"
-                break
+        if not is_case_file:
+            for vt_start, vt_end in vtac_intervals:
+                if vt_start <= start_time <= vt_end:
+                    label = "VTAC"
+                    break
 
-        windowed_data.append(
-            {
-                "Record": record_file,
-                "Start": start_time,
-                "End": end_time,
-                "Label": label,
-                "ECG": segment,
-            }
+        windows.append({
+            "Record": record_file,
+            "Start": start_time,
+            "End": end_time,
+            "Label": label,
+            "ECG": segment_clipped,
+            "Clip_Ratio": clip_ratio,
+            "Flatline_Flag": flat_flag,
+            "QC_Pass": qc_pass,
+        })
+
+    if verbose:
+        n_bad = sum(~np.array([w["QC_Pass"] for w in windows]))
+        print(
+            f"[INFO][{record_file}] "
+            f"Generated {len(windows)} windows "
+            f"({n_bad} flagged by QC)"
         )
 
-    return pd.DataFrame(windowed_data)
+    return pd.DataFrame(windows)
+
 
 def convert_and_relabel_windowed_df_full(
     df_full,
@@ -732,7 +840,7 @@ def convert_and_relabel_windowed_df_full(
     df["End"] = df["Start"] + W
 
     # Keep only needed columns
-    df = df[["Record", "Start", "End", "Label", "ECG"]]
+    df = df[["Record", "Start", "End", "Label", "ECG","Clip_Ratio"]]
 
     # ------------------------------------------------------
     # 2) Relabel to VTAC / Pre-VTAC / Other
