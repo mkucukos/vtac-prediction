@@ -49,10 +49,8 @@ Run `notebooks/01_preprocessing.ipynb` to:
 - Read WFDB records from `data/raw/`
 - Create sliding windows & labels (`utils/ecg_windowing.py`, `utils/vtac_labeling.py`)
 - Extract ECG features (`utils/ecg_features.py`)
-- Build per-subject baselines & z-scores
-- Save outputs to `data/processed/`:
-  - `windowed.parquet`, `features.parquet`, `zscores.parquet`
-  - Optional: `zscores_df.pkl` (pandas pickle)
+- Build per-subject, real-time robust standardization
+- Save outputs to `data/processed/`zscores_df.pkl` (pandas pickle)
 
 **Save a pickle with pandas:**
 ```python
@@ -69,7 +67,7 @@ Run `notebooks/02_model_improvement.ipynb` to:
 - Use `GroupKFold` by subject
 - Inspect metrics & feature importance
 - Save artifacts to `models/`:
-  - `best_model.joblib`, `feature_list.json`, `thresholds.json`
+  - `best_model.joblib`,
 
 The figure below illustrates feature dynamics and model behavior during training:
 
@@ -92,16 +90,15 @@ The following figure shows an example of predicted VTAC risk compared to ground 
 
 ## Utilities (import examples)
 ```python
-from utils.ecg_windowing import window_vtac_records, make_baseline_windows
-from utils.vtac_labeling import extend_last_vtac_label_inplace
-from utils.ecg_features import process_dataframe, calculate_tmv_and_qt
-from utils.ecg_plots import plot_tmv_qt_per_subject
+from utils.ecg_windowing import window_vtac_records
+from utils.ecg_features import process_dataframe, create_windowed_ecg_from_mat , convert_and_relabel_windowed_df_full
+from utils.ecg_plots import compute_refs_and_zscores, plot_subject_panels 
 ```
 
 ## Notes
 - Sampling rate default: **250 Hz**; window **30 s**; shift **5 s**.
 - VTAC intervals inferred from WFDB annotations (`[`, `]`).
-- Baselines are subject-specific (median references) and z-scoring uses **baseline-only** stats.
+- Z-scoring uses IQR-based robust statistics, computed causally using past windows only.
 
 ## Feature Glossary
 
