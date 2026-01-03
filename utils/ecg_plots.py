@@ -270,7 +270,7 @@ def plot_standardized_qt_tmv_with_dual_prediction(
     xgb_model_path_reg="xgboost_vtac_model_regression.joblib",
     z_threshold=1.5,
     output_dir="plots",
-    smooth_kernel=3,   # <-- NEW
+    smooth_kernel=3,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -285,7 +285,6 @@ def plot_standardized_qt_tmv_with_dual_prediction(
     for record_id in unique_records:
         print(f"\n[INFO] Processing record: {record_id}")
 
-        # Extract rows for this record
         record_df = results_df[results_df["Record"] == record_id].reset_index(drop=True)
 
         missing_features = [f for f in features if f not in record_df.columns]
@@ -293,30 +292,23 @@ def plot_standardized_qt_tmv_with_dual_prediction(
             print(f"[SKIP] {record_id}: Missing features or empty DF.")
             continue
 
-        # Ensure Start is datetime
         record_df["Start"] = pd.to_datetime(record_df["Start"], errors="coerce")
         if record_df["Start"].isna().all():
             print(f"[SKIP] {record_id}: All Start times are NaT.")
             continue
 
-        # Model Predictions
         X = record_df[features]
         record_df["Prob_RF"] = rf_model.predict_proba(X)[:, 1]
         record_df["Prob_XGB"] = xgb_model.predict_proba(X)[:, 1]
         record_df["Reg_RF"] = rf_model_reg.predict(X)
         record_df["Reg_XGB"] = xgb_model_reg.predict(X)
 
-        # --- Median filter smoothing (temporal) ---
         if smooth_kernel and smooth_kernel > 1:
             record_df["Prob_RF"] = medfilt(record_df["Prob_RF"].values, kernel_size=smooth_kernel)
             record_df["Reg_RF"]  = medfilt(record_df["Reg_RF"].values,  kernel_size=smooth_kernel)
-
-            # Optional: if you later re-enable XGB plots
             record_df["Prob_XGB"] = medfilt(record_df["Prob_XGB"].values, kernel_size=smooth_kernel)
             record_df["Reg_XGB"]  = medfilt(record_df["Reg_XGB"].values,  kernel_size=smooth_kernel)
 
-
-        # Keep only rows with valid predictions
         valid_mask = (
             X.notna().all(axis=1) &
             record_df["Prob_RF"].notna() &
@@ -330,28 +322,26 @@ def plot_standardized_qt_tmv_with_dual_prediction(
             print(f"[SKIP] {record_id}: No valid prediction windows.")
             continue
 
-        # Recompute time axis
         window_times = (record_df["Start"] - record_df["Start"].iloc[0]).dt.total_seconds()
-
-        # VTAC Alarm Times
         record_alarms = alarms_df[alarms_df["Files"] == record_id]
         record_start = record_df["Start"].iloc[0]
 
-        # Z-score fields (dynamic)
         z_fields = [
-            ("TMV_Score_Z", "darkblue", "TMV Score (Z)"),
-            ("QT_Interval_Z", "purple", "QT Interval (Z)"),
-            ("Mean_HR_Z", "green", "Mean HR (Z)"),
-            ("TMV_Global_Z", "crimson", "TMV Global (Z)"),
-            ("QRS_Duration_Z", "slateblue", "QRS Duration (Z)"),
-            ("AC_ECG_Peak_Z", "crimson", "AC Peak (Z)"),
+            ("QT_Interval_Z", "purple",    "QT Interval (Z)"),
+            ("Mean_HR_Z",     "green",     "Mean HR (Z)"),
+            ("TMV_Global_Z",  "crimson",   "TMV Global (Z)"),
+            ("QRS_Duration_Z","slateblue", "QRS Duration (Z)"),
+            ("Clip_Ratio",  "black",     "Clip Ratio"),
         ]
 
         num_z = len(z_fields)
-        total_plots = 1 + num_z + 2  # 1 raw + Z features + 2 prediction plots
+        total_plots = 1 + num_z + 2
 
-        # Create dynamic subplot count
-        fig, axes = plt.subplots(total_plots, 1, figsize=(40, 2.2 * total_plots), sharex=True)
+        fig, axes = plt.subplots(
+            total_plots, 1,
+            figsize=(40, 2.2 * total_plots),
+            sharex=True
+        )
 
         # ----- RAW ECG -----
         for i, row in record_df.iterrows():
@@ -364,26 +354,28 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         axes[0].set_ylim(-500, 500)
         axes[0].set_title(f"Record: {record_id}")
 
-        # ---- Helper to shade Z-threshold violations ----
         def shade_z(ax, vals, times, color):
             for i, z in enumerate(vals):
-                if pd.isna(z): continue
+                if pd.isna(z):
+                    continue
                 if z > z_threshold:
                     ax.axvspan(times[i], times[i] + 30, color=color, alpha=0.2)
                 elif z < -z_threshold:
                     ax.axvspan(times[i], times[i] + 30, color="blue", alpha=0.2)
 
-        # ----- Z-score plots -----
         for j, (field, color, label) in enumerate(z_fields):
             ax = axes[j + 1]
-            ax.plot(window_times, record_df[field], color=color, label=label)
-            ax.axhline(z_threshold, color="red", linestyle="--")
-            ax.axhline(-z_threshold, color="blue", linestyle="--")
-            shade_z(ax, record_df[field], window_times, color)
+            ax.plot(window_times, record_df[field], color=color)
             ax.set_ylabel(label)
-            ax.legend()
 
-        # ----- Classification Probabilities -----
+            if field != "Clip_Ratio":
+                ax.axhline(z_threshold, color="red", linestyle="--")
+                ax.axhline(-z_threshold, color="blue", linestyle="--")
+            else:
+                ax.set_ylim(0, 0.5)                # <-- key fix
+                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)  # optional QC threshold
+
+
         prob_ax = axes[1 + num_z]
         prob_ax.plot(window_times, record_df["Prob_RF"], color="orange", label="RF Prob")
         prob_ax.plot(window_times, record_df["Prob_XGB"], color="red", linestyle="--", label="XGB Prob")
@@ -391,7 +383,6 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         prob_ax.set_title("Predicted VTAC Probability")
         prob_ax.legend()
 
-        # ----- Regression Risk -----
         reg_ax = axes[2 + num_z]
         reg_ax.plot(window_times, record_df["Reg_RF"], color="orange", label="RF Reg")
         reg_ax.plot(window_times, record_df["Reg_XGB"], color="red", linestyle="--", label="XGB Reg")
@@ -400,25 +391,31 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         reg_ax.set_xlabel("Time (s)")
         reg_ax.legend()
 
-        # ----- Add VTAC markers to all axes -----
         max_time = window_times.max() + 30
 
         for ax in axes:
             ax.set_xlim(0, max_time)
             for _, alarm in record_alarms.iterrows():
                 vt_start = pd.to_datetime(alarm["StartTime"], errors="coerce")
-                if pd.isna(vt_start): continue
+                if pd.isna(vt_start):
+                    continue
                 vt_end = vt_start + timedelta(seconds=int(alarm["Duration"]))
                 s = (vt_start - record_start).total_seconds()
                 e = (vt_end - record_start).total_seconds()
                 ax.axvline(s, color="black", linestyle="--")
                 ax.axvline(e, color="black", linestyle="--")
 
+        # ==========================
+        # SAVE FIGURE  ✅
+        # ==========================
+        save_path = os.path.join(
+            output_dir,
+            f"{record_id}_dual_prediction_plot.png"
+        )
         plt.tight_layout()
-        save_path = os.path.join(output_dir, f"{record_id}_dual_prediction_plot.png")
-        # plt.savefig(save_path, dpi=300)
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.show()
-
+        plt.close(fig)
         print(f"[SAVED] {save_path}")
 
 
@@ -460,14 +457,12 @@ def plot_standardized_qt_tmv_with_single_regression(
         X = record_df[features]
         record_df["VTAC_Risk"] = rf_model_reg.predict(X)
 
-        # Temporal smoothing
         if smooth_kernel and smooth_kernel > 1:
             record_df["VTAC_Risk"] = medfilt(
                 record_df["VTAC_Risk"].values,
                 kernel_size=smooth_kernel
             )
 
-        # Drop invalid rows
         valid_mask = X.notna().all(axis=1) & record_df["VTAC_Risk"].notna()
         record_df = record_df[valid_mask].reset_index(drop=True)
 
@@ -475,7 +470,6 @@ def plot_standardized_qt_tmv_with_single_regression(
             print(f"[SKIP] {record_id}: No valid windows.")
             continue
 
-        # Time axis
         window_times = (
             record_df["Start"] - record_df["Start"].iloc[0]
         ).dt.total_seconds()
@@ -483,18 +477,15 @@ def plot_standardized_qt_tmv_with_single_regression(
         record_start = record_df["Start"].iloc[0]
         record_alarms = alarms_df[alarms_df["Files"] == record_id]
 
-        # --------------------
-        # Z-score fields
-        # --------------------
         z_fields = [
-            ("TMV_Score_Z", "darkblue", "TMV Score (Z)"),
-            ("QT_Interval_Z", "purple", "QT Interval (Z)"),
-            ("Mean_HR_Z", "green", "Mean HR (Z)"),
-            ("TMV_Global_Z", "crimson", "TMV Global (Z)"),
-            ("QRS_Duration_Z", "slateblue", "QRS Duration (Z)"),
+            ("QT_Interval_Z", "purple",    "QT Interval (Z)"),
+            ("Mean_HR_Z",     "green",     "Mean HR (Z)"),
+            ("TMV_Global_Z",  "crimson",   "TMV Global (Z)"),
+            ("QRS_Duration_Z","slateblue", "QRS Duration (Z)"),
+            ("Clip_Ratio",  "black",     "Clip Ratio"),
         ]
 
-        total_plots = 1 + len(z_fields) + 1  # raw + Z + regression
+        total_plots = 1 + len(z_fields) + 1
 
         fig, axes = plt.subplots(
             total_plots, 1,
@@ -515,9 +506,6 @@ def plot_standardized_qt_tmv_with_single_regression(
         axes[0].set_ylim(-500, 500)
         axes[0].set_title(f"Record: {record_id}")
 
-        # --------------------
-        # Helper: shade Z excursions
-        # --------------------
         def shade_z(ax, vals, times):
             for i, z in enumerate(vals):
                 if pd.isna(z):
@@ -527,20 +515,19 @@ def plot_standardized_qt_tmv_with_single_regression(
                 elif z < -z_threshold:
                     ax.axvspan(times[i], times[i] + 30, color="blue", alpha=0.2)
 
-        # --------------------
-        # Z-score panels
-        # --------------------
         for j, (field, color, label) in enumerate(z_fields):
             ax = axes[j + 1]
             ax.plot(window_times, record_df[field], color=color)
-            ax.axhline(z_threshold, color="red", linestyle="--")
-            ax.axhline(-z_threshold, color="blue", linestyle="--")
-            shade_z(ax, record_df[field], window_times)
             ax.set_ylabel(label)
 
-        # --------------------
-        # VTAC regression risk
-        # --------------------
+            if field != "Clip_Ratio":
+                ax.axhline(z_threshold, color="red", linestyle="--")
+                ax.axhline(-z_threshold, color="blue", linestyle="--")
+            else:
+                ax.set_ylim(0, 0.5)                # <-- key fix
+                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)  # optional QC threshold
+
+
         reg_ax = axes[-1]
         reg_ax.plot(window_times, record_df["VTAC_Risk"], color="orange", label="VTAC Risk")
         reg_ax.set_ylim(0, 1)
@@ -549,9 +536,6 @@ def plot_standardized_qt_tmv_with_single_regression(
         reg_ax.set_title("Predicted VTAC Risk (RF Regression)")
         reg_ax.legend()
 
-        # --------------------
-        # VTAC markers
-        # --------------------
         max_time = window_times.max() + 30
 
         for ax in axes:
@@ -566,8 +550,20 @@ def plot_standardized_qt_tmv_with_single_regression(
                 ax.axvline(s, color="black", linestyle="--")
                 ax.axvline(e, color="black", linestyle="--")
 
+        # ==========================
+        # SAVE FIGURE  ✅
+        # ==========================
+        out_path = os.path.join(
+            output_dir,
+            f"{record_id}_standardized_qt_tmv_regression.png"
+        )
+
         plt.tight_layout()
+        plt.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.show()
+        plt.close(fig)
+        print(f"[SAVED] {out_path}")
+
 
 def plot_subject_panels(
     processed_df,
