@@ -52,6 +52,17 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Key dependencies:
+
+| Package | Purpose |
+|---------|---------|
+| `pandas`, `numpy`, `scipy` | Data wrangling and signal processing |
+| `neurokit2`, `wfdb` | ECG peak detection and WFDB record I/O |
+| `scikit-learn`, `xgboost` | Model training and cross-validation |
+| `shap` | Feature importance (SHAP values) |
+| `matplotlib`, `plotly` | Visualisation |
+| `h5py` | Loading MAT waveform files |
+
 ---
 
 ## Datasets
@@ -73,7 +84,9 @@ Two ECG datasets are combined during preprocessing:
 
 - Reads WFDB and MAT records from their respective directories
 - Creates 30-second sliding windows with 5-second shifts
-- Applies a signal quality check: windows with clipping ratio > 10–15% (MAD-based) are flagged
+- Applies two per-window signal quality checks:
+  - **Clipping ratio** (MAD-based): windows where > 10–15% of samples exceed the MAD envelope are flagged
+  - **Flatline detection**: windows where ≥ 98% of consecutive sample differences are near-zero are rejected
 - Extracts ECG features per window (see [Feature Glossary](#feature-glossary))
 - Computes **causal, subject-specific z-scores** using IQR-based robust statistics over past windows only (minimum 60-window history)
 - Filters `Case_*` subjects to those with ≥ 350 valid windows
@@ -118,9 +131,23 @@ The figure below shows an example of predicted VTAC risk compared to ground trut
 ## Utilities
 
 ```python
+# Windowing
 from utils.ecg_windowing import window_vtac_records
-from utils.ecg_features import process_dataframe, create_windowed_ecg_from_mat, convert_and_relabel_windowed_df_full
-from utils.ecg_plots import compute_refs_and_zscores, plot_subject_panels
+
+# Feature extraction
+from utils.ecg_features import (
+    process_dataframe,
+    create_windowed_ecg_from_mat,
+    convert_and_relabel_windowed_df_full,
+)
+
+# Z-scoring and visualisation
+from utils.ecg_plots import (
+    compute_refs_and_zscores,          # causal IQR z-scoring + VTAC labeling
+    plot_subject_panels,               # per-subject ECG + z-score panels
+    plot_standardized_qt_tmv_with_dual_prediction,    # RF + XGB binary & regression overlay
+    plot_standardized_qt_tmv_with_single_regression,  # single RF regression overlay
+)
 ```
 
 ---
