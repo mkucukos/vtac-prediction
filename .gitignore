@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (large files — not tracked)
+data/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
