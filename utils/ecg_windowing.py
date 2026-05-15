@@ -3,6 +3,8 @@ import os
 import numpy as np
 import wfdb
 
+from .ecg_features import clipping_ratio, flatline_ratio
+
 
 def window_vtac_records(
     record_dir: str,
@@ -11,8 +13,11 @@ def window_vtac_records(
     shift_sec: int = 5,
     lead: int = 0,
     ann_ext: str = "atr",
+    mad_k: float = 8.0,
+    max_clip_ratio: float = 0.15,
+    verbose: bool = False,
 ) -> pd.DataFrame:
-    """Create sliding windows and label as VTAC / Pre-VTAC / Other."""
+    """Create sliding windows, label as VTAC / Pre-VTAC / Other, and apply QC."""
     WIN = win_sec * sample_rate
     STRIDE = shift_sec * sample_rate
 
@@ -50,9 +55,23 @@ def window_vtac_records(
                         else "Other"
                     )
 
-                rows.append(
-                    {"Record": name, "Start": st, "End": en, "Label": label, "ECG": seg}
-                )
+                clip_ratio = clipping_ratio(seg, k=mad_k)[1]
+                flat_flag  = flatline_ratio(seg)
+                qc_pass    = (clip_ratio <= max_clip_ratio) and (flat_flag == 0.0)
+
+                if verbose and not qc_pass:
+                    reasons = []
+                    if clip_ratio > max_clip_ratio:
+                        reasons.append(f"clip_ratio={clip_ratio:.2f}")
+                    if flat_flag == 1.0:
+                        reasons.append("flatline")
+                    print(f"[QC][{name}] window @{st} | {', '.join(reasons)}")
+
+                rows.append({
+                    "Record": name, "Start": st, "End": en, "Label": label,
+                    "ECG": seg, "Clip_Ratio": clip_ratio,
+                    "Flatline_Flag": flat_flag, "QC_Pass": qc_pass,
+                })
         except Exception as exc:
             print(f"[ERROR] {name}: {exc}")
 
