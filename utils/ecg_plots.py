@@ -6,6 +6,14 @@ import joblib
 from datetime import timedelta
 from scipy.signal import medfilt
 
+_PLOT_Z_FIELDS = [
+    ("QT_Interval_Z", "purple",    "QT Interval (Z)"),
+    ("Mean_HR_Z",     "green",     "Mean HR (Z)"),
+    ("TMV_Global_Z",  "crimson",   "TMV Global (Z)"),
+    ("QRS_Duration_Z","slateblue", "QRS Duration (Z)"),
+    ("Clip_Ratio",    "black",     "Clip Ratio"),
+]
+
 def compute_refs_and_zscores(
     results_df,
     sampling_rate=250,
@@ -112,7 +120,7 @@ def compute_refs_and_zscores(
                 df.at[idx[i], f"{field}_Z"] = np.clip(z, -10, 10)
 
             # ---- availability (FIX HERE) ----
-            row_z = df.loc[idx[i], z_cols].astype(float)  # ← THIS LINE FIXES IT
+            row_z = df.loc[idx[i], z_cols].astype(float)
             nan_frac = row_z.isna().mean()
 
             df.loc[idx[i], z_cols] = row_z.fillna(0)
@@ -187,14 +195,7 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         record_alarms = alarms_df[alarms_df["Files"] == record_id]
         record_start = record_df["Start"].iloc[0]
 
-        z_fields = [
-            ("QT_Interval_Z", "purple",    "QT Interval (Z)"),
-            ("Mean_HR_Z",     "green",     "Mean HR (Z)"),
-            ("TMV_Global_Z",  "crimson",   "TMV Global (Z)"),
-            ("QRS_Duration_Z","slateblue", "QRS Duration (Z)"),
-            ("Clip_Ratio",  "black",     "Clip Ratio"),
-        ]
-
+        z_fields = _PLOT_Z_FIELDS
         num_z = len(z_fields)
         total_plots = 1 + num_z + 2
 
@@ -215,15 +216,6 @@ def plot_standardized_qt_tmv_with_dual_prediction(
         axes[0].set_ylim(-500, 500)
         axes[0].set_title(f"Record: {record_id}")
 
-        def shade_z(ax, vals, times, color):
-            for i, z in enumerate(vals):
-                if pd.isna(z):
-                    continue
-                if z > z_threshold:
-                    ax.axvspan(times[i], times[i] + 30, color=color, alpha=0.2)
-                elif z < -z_threshold:
-                    ax.axvspan(times[i], times[i] + 30, color="blue", alpha=0.2)
-
         for j, (field, color, label) in enumerate(z_fields):
             ax = axes[j + 1]
             ax.plot(window_times, record_df[field], color=color)
@@ -233,9 +225,8 @@ def plot_standardized_qt_tmv_with_dual_prediction(
                 ax.axhline(z_threshold, color="red", linestyle="--")
                 ax.axhline(-z_threshold, color="blue", linestyle="--")
             else:
-                ax.set_ylim(0, 0.5)                # <-- key fix
-                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)  # optional QC threshold
-
+                ax.set_ylim(0, 0.5)
+                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)
 
         prob_ax = axes[1 + num_z]
         prob_ax.plot(window_times, record_df["Prob_RF"], color="orange", label="RF Prob")
@@ -338,14 +329,7 @@ def plot_standardized_qt_tmv_with_single_regression(
         record_start = record_df["Start"].iloc[0]
         record_alarms = alarms_df[alarms_df["Files"] == record_id]
 
-        z_fields = [
-            ("QT_Interval_Z", "purple",    "QT Interval (Z)"),
-            ("Mean_HR_Z",     "green",     "Mean HR (Z)"),
-            ("TMV_Global_Z",  "crimson",   "TMV Global (Z)"),
-            ("QRS_Duration_Z","slateblue", "QRS Duration (Z)"),
-            ("Clip_Ratio",  "black",     "Clip Ratio"),
-        ]
-
+        z_fields = _PLOT_Z_FIELDS
         total_plots = 1 + len(z_fields) + 1
 
         fig, axes = plt.subplots(
@@ -367,15 +351,6 @@ def plot_standardized_qt_tmv_with_single_regression(
         axes[0].set_ylim(-500, 500)
         axes[0].set_title(f"Record: {record_id}")
 
-        def shade_z(ax, vals, times):
-            for i, z in enumerate(vals):
-                if pd.isna(z):
-                    continue
-                if z > z_threshold:
-                    ax.axvspan(times[i], times[i] + 30, color="red", alpha=0.2)
-                elif z < -z_threshold:
-                    ax.axvspan(times[i], times[i] + 30, color="blue", alpha=0.2)
-
         for j, (field, color, label) in enumerate(z_fields):
             ax = axes[j + 1]
             ax.plot(window_times, record_df[field], color=color)
@@ -385,8 +360,8 @@ def plot_standardized_qt_tmv_with_single_regression(
                 ax.axhline(z_threshold, color="red", linestyle="--")
                 ax.axhline(-z_threshold, color="blue", linestyle="--")
             else:
-                ax.set_ylim(0, 0.5)                # <-- key fix
-                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)  # optional QC threshold
+                ax.set_ylim(0, 0.5)
+                ax.axhline(0.15, color="red", linestyle="--", alpha=0.7)
 
 
         reg_ax = axes[-1]

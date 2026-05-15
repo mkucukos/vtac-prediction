@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 # T-wave feature extraction
 # ==============================
 def extract_t_wave_features(t_wave_segment, sampling_rate=250):
-    time = np.arange(len(t_wave_segment)) / sampling_rate
     peak_idx = np.argmax(t_wave_segment)
 
     t1 = peak_idx
@@ -565,12 +564,7 @@ def flatline_ratio(signal, eps=1e-6):
     diffs = np.diff(signal)
     repeat_ratio = np.mean(np.abs(diffs) < eps)
 
-    var_thresh = epoch_var * 0.2
-    amp_thresh = epoch_ptp * 0.2
-
-    flat_mask = ((epoch_var < var_thresh) & (epoch_ptp < amp_thresh)) or (
-        repeat_ratio > 0.98
-    )
+    flat_mask = repeat_ratio > 0.98
 
     return float(flat_mask)
 
