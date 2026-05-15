@@ -128,6 +128,16 @@ def rr_autocorr_metrics(r_peaks, fs, mean_window_beats=1):
     return peak, float(k), mean_win
 
 
+def _empty_result(ecg_segment):
+    return (
+        np.nan, [], ecg_segment.tolist(),
+        np.nan, np.nan, np.nan, {}, np.nan,
+        np.nan, np.nan, np.nan, np.nan, np.nan,
+        np.nan, np.nan, [],
+        np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
+    )
+
+
 # ==============================
 # TMV and QT calculation (now returns QRS_Wave resampled to 100)
 # ==============================
@@ -162,30 +172,7 @@ def calculate_tmv_and_qt(
     try:
         ecg_segment = np.array(ecg_segment)
         if np.isnan(ecg_segment).any() or np.std(ecg_segment) == 0:
-            return (
-                np.nan,
-                [],
-                ecg_segment.tolist(),
-                np.nan,
-                np.nan,
-                np.nan,
-                {},
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                [],
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-            )
+            return _empty_result(ecg_segment)
 
         ecg_filtered = bandpass_filter(
             ecg_segment, lowcut=0.2, highcut=25, fs=sampling_rate
@@ -194,30 +181,7 @@ def calculate_tmv_and_qt(
         _, info = nk.ecg_peaks(ecg_cleaned, sampling_rate=sampling_rate)
         r_peaks = info.get("ECG_R_Peaks", [])
         if len(r_peaks) < 3:
-            return (
-                np.nan,
-                [],
-                ecg_segment.tolist(),
-                np.nan,
-                np.nan,
-                np.nan,
-                {},
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                [],
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-            )
+            return _empty_result(ecg_segment)
 
         # Delineation
         _, delineate = nk.ecg_delineate(
@@ -310,30 +274,7 @@ def calculate_tmv_and_qt(
             st_slopes.append(st_slope)
 
         if len(t_waves) < 3:
-            return (
-                np.nan,
-                [],
-                ecg_segment.tolist(),
-                np.nan,
-                np.nan,
-                np.nan,
-                {},
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                [],
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-                np.nan,
-            )
+            return _empty_result(ecg_segment)
 
         avg_qt = np.mean(qt_intervals)
         subject_twave = np.mean(t_waves, axis=0)
@@ -379,9 +320,7 @@ def calculate_tmv_and_qt(
         st_slope_mean = np.nanmean(st_slopes) if len(st_slopes) else np.nan
 
         # Averaged QRS_Wave (len 100)
-        if len(qrs_waves) >= 3:
-            subject_qrs = np.mean(qrs_waves, axis=0).tolist()
-        elif len(qrs_waves) > 0:
+        if len(qrs_waves) > 0:
             subject_qrs = np.mean(qrs_waves, axis=0).tolist()
         else:
             subject_qrs = []
@@ -421,30 +360,7 @@ def calculate_tmv_and_qt(
 
     except Exception as e:
         print(f"[ERROR] {e}")
-        return (
-            np.nan,
-            [],
-            ecg_segment.tolist(),
-            np.nan,
-            np.nan,
-            np.nan,
-            {},
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            [],
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-        )
+        return _empty_result(ecg_segment)
 
 
 # ==============================
