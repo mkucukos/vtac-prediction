@@ -558,9 +558,6 @@ def flatline_ratio(signal, eps=1e-6):
     if len(signal) < 2:
         return 1.0
 
-    epoch_var = np.var(signal)
-    epoch_ptp = np.ptp(signal)
-
     diffs = np.diff(signal)
     repeat_ratio = np.mean(np.abs(diffs) < eps)
 
@@ -761,10 +758,6 @@ def convert_and_relabel_windowed_df_full(
         start = row["Start"]
         end = row["End"]
 
-        # Here we convert sample-based Start to time for comparison
-        # But better: convert VTAC intervals to sample indices too
-        # Let’s assume df_full had timestamp Start
-        # We fetch the original timestamp row using df_full
         original_time = df_full.loc[row.name, "Start"]
 
         # --- VTAC: if original_time is inside any VTAC interval ---
