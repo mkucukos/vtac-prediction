@@ -84,9 +84,10 @@ Two ECG datasets are combined during preprocessing:
 
 - Reads WFDB and MAT records from their respective directories
 - Creates 30-second sliding windows with 5-second shifts
-- Applies two per-window signal quality checks:
-  - **Clipping ratio** (MAD-based): windows where > 10–15% of samples exceed the MAD envelope are flagged
+- Applies two per-window signal quality checks (identical for both CU and MAT pipelines):
+  - **Clipping ratio** (MAD-based, `k=8`, threshold `0.15`): windows where > 15% of samples exceed the MAD envelope are flagged
   - **Flatline detection**: windows where ≥ 98% of consecutive sample differences are near-zero are rejected
+  - Each window gets `Clip_Ratio`, `Flatline_Flag`, and `QC_Pass` columns
 - Extracts ECG features per window (see [Feature Glossary](#feature-glossary))
 - Computes **causal, subject-specific z-scores** using IQR-based robust statistics over past windows only (minimum 60-window history)
 - Filters `Case_*` subjects to those with ≥ 350 valid windows
